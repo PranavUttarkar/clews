@@ -9,6 +9,7 @@ from lightning.fabric.strategies import DDPStrategy
 from lib import eval, dataset
 from lib import tensor_ops as tops
 from utils import pytorch_utils, print_utils
+from lib.npy_dataset import KaggleDiscogsNPYDataset
 
 # --- Get arguments (and set defaults) --- Basic ---
 args = OmegaConf.from_cli()
@@ -97,15 +98,26 @@ if args.path_meta is not None:
     conf.path.meta = args.path_meta
 conf.data.path = conf.path
 
-# Get dataset
-myprint("Dataset...")
-dset = dataset.Dataset(
-    conf.data,
-    args.partition,
-    augment=False,
-    fullsongs=True,
-    verbose=fabric.is_global_zero,
-)
+# Add argument for Kaggle JSON split
+if "kaggle_split_json" in args and args.kaggle_split_json is not None:
+    # Use KaggleDiscogsNPYDataset
+    myprint(f"Using KaggleDiscogsNPYDataset with split: {args.kaggle_split_json}")
+    dset = KaggleDiscogsNPYDataset(
+        split_json=args.kaggle_split_json,
+        npy_root=conf.path.npy,
+        augment=False,
+        fullsongs=True,
+        verbose=fabric.is_global_zero,
+    )
+else:
+    # Default: use original Dataset
+    dset = dataset.Dataset(
+        conf.data,
+        args.partition,
+        augment=False,
+        fullsongs=True,
+        verbose=fabric.is_global_zero,
+    )
 dloader = torch.utils.data.DataLoader(
     dset,
     batch_size=1,
@@ -115,6 +127,9 @@ dloader = torch.utils.data.DataLoader(
     pin_memory=False,
 )
 dloader = fabric.setup_dataloaders(dloader)
+
+# Usage:
+# python test.py checkpoint=... kaggle_split_json=metadata/test.json
 
 ###############################################################################
 

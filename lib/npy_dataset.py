@@ -266,14 +266,29 @@ class NPYDataset(torch.utils.data.Dataset):
 def load_kaggle_discogs_split(json_path):
     """
     Loads a Kaggle Discogs split JSON file and returns a list of .npy file paths.
-    Assumes JSON structure: {"root": [[file1, file2, ...], ...]}
-    Replaces .mm with .npy in file paths.
+    Handles:
+    - dict with 'root' key (list of lists)
+    - list of lists
+    - flat list
     """
+    import json
     with open(json_path, "r") as f:
         data = json.load(f)
-    all_files = []
-    for group in data["root"]:
-        all_files.extend(group)
+    # Case 1: dict with 'root'
+    if isinstance(data, dict) and "root" in data:
+        all_files = []
+        for group in data["root"]:
+            all_files.extend(group)
+    # Case 2: list of lists
+    elif isinstance(data, list) and all(isinstance(x, list) for x in data):
+        all_files = []
+        for group in data:
+            all_files.extend(group)
+    # Case 3: flat list
+    elif isinstance(data, list) and all(isinstance(x, str) for x in data):
+        all_files = data
+    else:
+        raise ValueError("Unexpected JSON format in split file: {}".format(type(data)))
     npy_files = [x.replace(".mm", ".npy") for x in all_files]
     return npy_files
 

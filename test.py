@@ -10,12 +10,24 @@ from lightning.fabric.strategies import DDPStrategy
 from lib import eval, dataset
 from lib import tensor_ops as tops
 from utils import pytorch_utils, print_utils
-from lib.npy_dataset import KaggleDiscogsNPYDataset
+from lib.npy_dataset import DiscogsNPYDataset
 
 # --- Get arguments (and set defaults) --- Basic ---
 args = OmegaConf.from_cli()
 assert "checkpoint" in args
 log_path, _ = os.path.split(args.checkpoint)
+
+# Standard configuration path
+config_path = os.path.join(log_path, "configuration.yaml")
+if not os.path.exists(config_path):
+    # Try to use the default config file from the project directory
+    default_config_path = 'config/discogs-cqt-clews.yaml'
+    if os.path.exists(default_config_path):
+        config_path = default_config_path
+        print(f"Using default configuration from: {config_path}")
+    else:
+        raise FileNotFoundError(f"Configuration file not found at {config_path} or {default_config_path}")
+
 if "ngpus" not in args:
     args.ngpus = 1
 if "nnodes" not in args:
@@ -77,7 +89,7 @@ fabric.barrier()
 # Load conf
 myprint(OmegaConf.to_yaml(args))
 myprint("Load model conf...")
-conf = OmegaConf.load(os.path.join(log_path, "configuration.yaml"))
+conf = OmegaConf.load(config_path)
 
 # Init model
 myprint("Init model...")
@@ -88,10 +100,17 @@ model = fabric.setup(model)
 
 # Load model
 myprint("  Load checkpoint")
-state = pytorch_utils.get_state(model, None, None, conf, None, None, None)
-fabric.load(args.checkpoint, state)
-model, _, _, conf, epoch, _, best = pytorch_utils.set_state(state)
-myprint(f"  ({epoch} epochs; best was {best:.3f})")
+state = torch.load(args.checkpoint, map_location='cpu')
+weights = state['model']
+try:
+    model.load_state_dict(weights, strict=True)
+except RuntimeError as e:
+    print("Strict loading failed, loading with strict=False. Error was:")
+    print(e)
+    model.load_state_dict(weights, strict=False)
+# Remove set_state logic for model, epoch, best, etc. if not needed
+# model, _, _, conf, epoch, _, best = pytorch_utils.set_state(state)
+# myprint(f"  ({epoch} epochs; best was {best:.3f})")
 model.eval()
 if args.path_audio is not None:
     conf.path.audio = args.path_audio
@@ -99,12 +118,12 @@ if args.path_meta is not None:
     conf.path.meta = args.path_meta
 conf.data.path = conf.path
 
-# Add argument for Kaggle JSON split
-if "kaggle_split_json" in args and args.kaggle_split_json is not None:
-    # Use KaggleDiscogsNPYDataset
-    myprint(f"Using KaggleDiscogsNPYDataset with split: {args.kaggle_split_json}")
-    dset = KaggleDiscogsNPYDataset(
-        split_json=args.kaggle_split_json,
+# Add argument for JSON split
+if "split_json" in args and args.split_json is not None:
+    # Use DiscogsNPYDataset
+    myprint(f"Using DiscogsNPYDataset with split: {args.split_json}")
+    dset = DiscogsNPYDataset(
+        split_json=args.split_json,
         npy_root=conf.path.npy,
         augment=False,
         fullsongs=True,
@@ -130,7 +149,7 @@ dloader = torch.utils.data.DataLoader(
 dloader = fabric.setup_dataloaders(dloader)
 
 # Usage:
-# python test.py checkpoint=... kaggle_split_json=metadata/test.json
+# python test.py checkpoint=... split_json=metadata/test.json
 
 ###############################################################################
 

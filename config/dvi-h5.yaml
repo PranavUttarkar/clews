@@ -1,0 +1,95 @@
+jobname: null
+seed: 43
+checkpoint: null
+limit_batches: null
+
+path:
+  cache: "cache/"
+  logs: "logs/"
+  # Root directory with .h5 chunks discogs_vi_chunk_00001.h5 ...
+  h5_root: "../../discogs-vi-h5-rechunked"
+  # Optional root containing magnitude_cqt/cqt shards with .mm files
+  mm_root: null
+  # Discogs JSONL with entries per youtube_id
+  jsonl: "metadata/Discogs-VI-20240701.jsonl"
+  # Built index stored here
+  index: "cache/discogs_h5_index.pt"
+  # Format.json-style splits
+  splits:
+    train: "metadata/train.json"
+    valid: "metadata/valid.json"
+    test: "metadata/verify.json"
+
+fabric:
+  nnodes: 1
+  ngpus: 1
+  precision: "32"
+
+data:
+  input: "cqt" # use precomputed CQT input
+  nworkers: 16 # tune per node
+  samplerate: 16000 # used by model (not for CQT path)
+  pad_mode: "repeat"
+  n_per_class: 4
+  p_samesong: 0
+  prefetch_factor: 4
+  # Shingling parameters injected from model in train_h5.py
+  shingle_len: null # seconds
+  shingle_hop: null # seconds
+  feature_hoplen: null # seconds per frame in precomputed CQT
+
+augmentations:
+  specaugment:
+    p: 0.1
+    n: 1
+    full: true
+    f_pc: 0.15
+    t_pc: 0.15
+  timestretch:
+    p: 0.1
+    r: [0.6, 1.8]
+    pad_mode: "repeat"
+    cut_mode: "random"
+  pitchtranspose:
+    p: 0.1
+    r: [-12, 12]
+
+model:
+  name: "clews"
+  shingling:
+    len: 20
+    hop: 20
+  cqt:
+    hoplen: 0.02 # must match feature hop used in precomputed CQT
+    noctaves: 7
+    nbinsoct: 12
+    fscale: 1
+    pool: 5
+  frontend:
+    cqtpow: 0.5
+    channels: [128, 256]
+  backbone:
+    blocks: [3, 4, 6, 3]
+    channels: [256, 512, 1024, 2048]
+    down: [1, 2, 2, 1]
+  zdim: 1024
+  loss:
+    redux:
+      pos: "bpwr-5"
+      neg: "min"
+    gamma: 5
+    epsilon: 1e-6
+
+training:
+  batchsize: 25
+  numepochs: 1000
+  save_freq: null
+  optim:
+    name: "adam"
+    lr: 2e-4
+    wd: 0
+    sched: "plateau_10"
+    min_lr: 1e-6
+  monitor:
+    quantity: "m_COMP"
+    mode: "min"

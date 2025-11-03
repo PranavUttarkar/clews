@@ -79,6 +79,37 @@ OMP_NUM_THREADS=1 python train.py jobname=shs-clews conf=config/shs-clews.yaml f
 OMP_NUM_THREADS=1 python train.py jobname=dvi-clews conf=config/dvi-clews.yaml fabric.nnodes=1 fabric.ngpus=2
 ```
 
+### Training with precomputed CQT in HDF5/MM (Discogs-VI)
+
+If you have Discogs-VI features stored as HDF5 chunks (`discogs_vi_chunk_XXXXX.h5`) and/or memory-mapped `.mm` files,
+you can train directly on the precomputed CQT without recomputing from waveform:
+
+1) Build an index once (maps `youtube_id` to h5/mm locations):
+
+```bash
+# Example (adjust paths)
+python scripts/build_discogs_h5_index.py --jsonl metadata/Discogs-VI-20240701.jsonl --h5-root discogs-vi-h5 --out cache/discogs_h5_index.pt
+```
+
+2) Configure `config/dvi-h5.yaml` with your paths, ensure `model.cqt.hoplen` matches the feature hop (commonly 0.02s).
+
+3) Launch training using the H5 loader:
+
+```bash
+OMP_NUM_THREADS=1 python train_h5.py jobname=dvi-h5 conf=config/dvi-h5.yaml fabric.nnodes=1 fabric.ngpus=2
+```
+
+Notes for HPC:
+- For shared filesystems, you may need `HDF5_USE_FILE_LOCKING=FALSE`.
+- Increase `data.nworkers` and `data.prefetch_factor` as resources allow; the loader opens HDF5 per worker.
+- Only CQ-domain augmentations are applied in this mode.
+
+Files added:
+- `lib/h5_dataset.py`: HDF5/MM dataset that returns (S,C,T) CQT shingles per version.
+- `scripts/build_discogs_h5_index.py`: builds `cache/discogs_h5_index.pt` from JSONL and directory layout.
+- `train_h5.py`: training loop that feeds precomputed CQT directly into `model.embed`.
+- `config/dvi-h5.yaml`: config template for H5/MM training.
+
 ### Testing
 
 To launch the testing script, you can run, for instance:

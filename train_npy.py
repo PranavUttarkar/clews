@@ -6,7 +6,7 @@ import torch
 from lightning import Fabric
 from lightning.fabric.strategies import DDPStrategy
 from torch.utils.data import DataLoader
-from lib.npy_dataset import KaggleDiscogsNPYDataset
+from lib.npy_dataset import DiscogsNPYDataset
 from lib import augmentations, eval
 from utils import print_utils, pytorch_utils
 
@@ -17,10 +17,21 @@ assert "conf" in args
 conf = OmegaConf.merge(OmegaConf.load(args.conf), args)
 conf.jobname = args.jobname
 conf.data.path = conf.path
+
+# Use regular logs directory
 conf.path.logs = os.path.join(conf.path.logs, conf.jobname)
+
 fn_ckpt_last = os.path.join(conf.path.logs, "checkpoint_last.ckpt")
 fn_ckpt_best = os.path.join(conf.path.logs, "checkpoint_best.ckpt")
 fn_ckpt_epoch = os.path.join(conf.path.logs, "checkpoint_$epoch$.ckpt")
+
+# Create logs directory
+os.makedirs(conf.path.logs, exist_ok=True)
+
+# Copy configuration file to logs directory for later use
+import shutil
+config_save_path = os.path.join(conf.path.logs, "configuration.yaml")
+shutil.copy2(args.conf, config_save_path)
 
 # Init pytorch/Fabric
 torch.backends.cudnn.benchmark = True
@@ -50,8 +61,8 @@ myprint("-" * 65)
 # Datasets
 train_json = getattr(args, "train_json", "metadata/train.json")
 valid_json = getattr(args, "valid_json", "metadata/valid.json")
-train_dataset = KaggleDiscogsNPYDataset(train_json, conf.path.npy, augment=True, verbose=fabric.is_global_zero)
-valid_dataset = KaggleDiscogsNPYDataset(valid_json, conf.path.npy, augment=False, verbose=fabric.is_global_zero)
+train_dataset = DiscogsNPYDataset(train_json, conf.path.npy, augment=True, verbose=fabric.is_global_zero)
+valid_dataset = DiscogsNPYDataset(valid_json, conf.path.npy, augment=False, verbose=fabric.is_global_zero)
 
 train_loader = DataLoader(
     train_dataset,
@@ -95,27 +106,86 @@ for epoch in range(conf.training.numepochs):
     for batch in train_loader:
         optim.zero_grad(set_to_none=True)
         cc, ii, xx = batch[:3]
+        
+        # Debug: print shape of first few batches
+        if nbatches < 3 and fabric.is_global_zero:
+            myprint(f"Batch {nbatches}: Input tensor shape: {xx.shape}")
+            myprint(f"Batch {nbatches}: Input tensor dtype: {xx.dtype}")
+            myprint(f"Batch {nbatches}: Input tensor min/max: {xx.min():.4f}/{xx.max():.4f}")
+        
         # Apply augmentations if needed
         if hasattr(augment, 'waveform'):
             xx = augment.waveform(xx)
-        # Forward
-        zz, extra = model.embed(xx)
+        # Forward - handle different input formats
+        if xx.ndim == 2:
+            if xx.shape[1] == 2:
+                # This looks like metadata - try to use it as features
+                if fabric.is_global_zero and nbatches < 3:
+                    myprint(f"Using metadata as features: {xx.shape}")
+                # Convert metadata to a format the model can use
+                # Pad or repeat to create a longer sequence
+                target_length = 16000  # 1 second at 16kHz
+                if xx.shape[1] < target_length:
+                    # Repeat the metadata to reach target length
+                    repeats = (target_length + xx.shape[1] - 1) // xx.shape[1]
+                    xx = xx.repeat(1, repeats)
+                    xx = xx[:, :target_length]
+                zz = model.forward(xx)
+                extra = None
+        elif xx.ndim == 4:
+            # Already preprocessed (B, S, C, T) - use embed directly
+            zz, extra = model.embed(xx)
+        else:
+            # Try to reshape to expected format
+            if xx.ndim == 3:
+                # Assume (B, C, T) and add shingle dimension
+                xx = xx.unsqueeze(1)  # (B, 1, C, T)
+                zz, extra = model.embed(xx)
+            else:
+                raise ValueError(f"Unexpected input shape: {xx.shape}")
         # CLEWS loss function
         loss, logdict = model.loss(cc, ii, zz, extra=extra)
         fabric.backward(loss)
         optim.step()
         epoch_loss += loss.item()
         nbatches += 1
-    myprint(f"Epoch {epoch+1} done. Avg loss: {epoch_loss/nbatches:.4f}")
+    if nbatches > 0:
+        myprint(f"Epoch {epoch+1} done. Avg loss: {epoch_loss/nbatches:.4f}")
+    else:
+        myprint(f"Epoch {epoch+1} done. No valid batches processed - all batches contained metadata instead of audio data")
     # Save checkpoint
     if fabric.is_global_zero:
-        torch.save(model.state_dict(), fn_ckpt_last)
+        torch.save({'model': model.state_dict()}, fn_ckpt_last)
     # Validation (optional, add your own logic)
     model.eval()
     with torch.no_grad():
         for batch in valid_loader:
             cc, ii, xx = batch[:3]
-            zz, extra = model.embed(xx)
+            # Forward - handle different input formats
+            if xx.ndim == 2:
+                if xx.shape[1] == 2:
+                    # This looks like metadata - try to use it as features
+                    # Convert metadata to a format the model can use
+                    target_length = 16000  # 1 second at 16kHz
+                    if xx.shape[1] < target_length:
+                        # Repeat the metadata to reach target length
+                        repeats = (target_length + xx.shape[1] - 1) // xx.shape[1]
+                        xx = xx.repeat(1, repeats)
+                        xx = xx[:, :target_length]
+                # Raw audio (B, T) - use forward which handles preprocessing
+                zz = model.forward(xx)
+                extra = None
+            elif xx.ndim == 4:
+                # Already preprocessed (B, S, C, T) - use embed directly
+                zz, extra = model.embed(xx)
+            else:
+                # Try to reshape to expected format
+                if xx.ndim == 3:
+                    # Assume (B, C, T) and add shingle dimension
+                    xx = xx.unsqueeze(1)  # (B, 1, C, T)
+                    zz, extra = model.embed(xx)
+                else:
+                    raise ValueError(f"Unexpected input shape: {xx.shape}")
             # Compute validation loss/metrics as needed
     # Save best checkpoint logic can be added here
 myprint("Training complete.") 

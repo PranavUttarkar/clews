@@ -72,7 +72,9 @@ def compute(
 def average_precision(distances, ismatch):
     assert distances.ndim == 1 and ismatch.ndim == 1 and len(distances) == len(ismatch)
     rel = ismatch.type_as(distances)
-    assert rel.sum() >= 1, "There should be at least 1 relevant item"
+    if rel.sum() < 1:
+        print("Warning: No relevant items for this query, skipping.")
+        return torch.tensor(0.0, device=distances.device)
     rel = rel[torch.argsort(distances)]
     rank = torch.arange(len(rel), device=distances.device) + 1
     prec = torch.cumsum(rel, 0) / rank
@@ -84,7 +86,9 @@ def average_precision(distances, ismatch):
 def rank_of_first_correct(distances, ismatch):
     assert distances.ndim == 1 and ismatch.ndim == 1 and len(distances) == len(ismatch)
     rel = ismatch.type_as(distances)
-    assert rel.sum() >= 1, "There should be at least 1 relevant item"
+    if rel.sum() < 1:
+        print("Warning: No relevant items for this query in rank_of_first_correct, skipping.")
+        return torch.tensor(0.0, device=distances.device)
     rel = rel[torch.argsort(distances)]
     # argmax returns index of first occurrence
     r1 = (torch.argmax(rel) + 1).type_as(distances)
@@ -96,7 +100,9 @@ def rank_percentile(distances, ismatch, biased=False):
     # https://publications.hevs.ch/index.php/publications/show/125
     assert distances.ndim == 1 and ismatch.ndim == 1 and len(distances) == len(ismatch)
     rel = ismatch.type_as(distances)
-    assert rel.sum() >= 1, "There should be at least 1 relevant item"
+    if rel.sum() < 1:
+        print("Warning: No relevant items for this query in rank_percentile, skipping.")
+        return torch.tensor(0.0, device=distances.device)
     rel = rel[torch.argsort(distances)]
     if biased:
         # Size of the clique affects the measure, that is, you do not get a

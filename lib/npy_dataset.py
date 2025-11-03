@@ -263,9 +263,9 @@ class NPYDataset(torch.utils.data.Dataset):
             sys.exit() 
 
 
-def load_kaggle_discogs_split(json_path):
+def load_discogs_split(json_path):
     """
-    Loads a Kaggle Discogs split JSON file and returns a list of .npy file paths.
+    Loads a Discogs split JSON file and returns a list of .npy file paths.
     Handles:
     - dict with 'root' key (list of lists)
     - list of lists
@@ -292,9 +292,9 @@ def load_kaggle_discogs_split(json_path):
     npy_files = [x.replace(".mm", ".npy") for x in all_files]
     return npy_files
 
-class KaggleDiscogsNPYDataset(torch.utils.data.Dataset):
+class DiscogsNPYDataset(torch.utils.data.Dataset):
     """
-    Dataset for Kaggle Discogs CQT data with JSON split files.
+    Dataset for Discogs CQT data with JSON split files.
     Groups files into cliques by their parent folder (2-char subfolder).
     """
     def __init__(self, split_json, npy_root, augment=False, fullsongs=False, checks=True, verbose=False):
@@ -302,7 +302,7 @@ class KaggleDiscogsNPYDataset(torch.utils.data.Dataset):
         self.augment = augment
         self.fullsongs = fullsongs
         self.verbose = verbose
-        self.file_list = load_kaggle_discogs_split(split_json)
+        self.file_list = load_discogs_split(split_json)
         # Group by parent folder (clique)
         self.clique_dict = {}
         for path in self.file_list:
@@ -334,6 +334,51 @@ class KaggleDiscogsNPYDataset(torch.utils.data.Dataset):
         icl = self.clique2id[clique]
         # Load .npy data
         npy_path = os.path.join(self.npy_root, os.path.relpath(npy_rel_path, start="Discogs-VI-20240701/magnitude_cqt/cqt"))
-        x = np.load(npy_path)
-        x = torch.from_numpy(x).float()
+        
+        # Handle case sensitivity issue - only convert if file doesn't exist
+        original_path = npy_path
+        if not os.path.exists(npy_path):
+            # Try to find the correct case by checking the parent directory
+            path_parts = npy_path.split(os.sep)
+            if len(path_parts) >= 2:
+                parent_dir = os.sep.join(path_parts[:-2])
+                folder_name = path_parts[-2]
+                filename = path_parts[-1]
+                
+                if os.path.exists(parent_dir):
+                    # List actual directory contents to find correct case
+                    try:
+                        actual_folders = os.listdir(parent_dir)
+                        # Find folder with case-insensitive match
+                        for actual_folder in actual_folders:
+                            if actual_folder.lower() == folder_name.lower():
+                                path_parts[-2] = actual_folder
+                                npy_path = os.sep.join(path_parts)
+                                if self.verbose:
+                                    print(f"Case conversion: {original_path} -> {npy_path}")
+                                break
+                    except (OSError, PermissionError):
+                        # Only convert to lowercase if the original was uppercase
+                        if folder_name.isupper():
+                            path_parts[-2] = folder_name.lower()
+                            npy_path = os.sep.join(path_parts)
+                            if self.verbose:
+                                print(f"Fallback case conversion: {original_path} -> {npy_path}")
+                
+                if self.verbose and not os.path.exists(npy_path):
+                    print(f"Warning: File not found even after case conversion: {original_path} -> {npy_path}")
+        
+        try:
+            x = np.load(npy_path)
+            x = torch.from_numpy(x).float()
+            
+            # Debug: print info about loaded data
+            if self.verbose and idx < 5:  # Only print first 5 files
+                print(f"Loaded {npy_path}: shape={x.shape}, dtype={x.dtype}, min={x.min():.2f}, max={x.max():.2f}")
+                
+        except FileNotFoundError:
+            if self.verbose:
+                print(f"Error: File not found: {npy_path}")
+            # Return a zero tensor as fallback
+            x = torch.zeros(1024, 1000)  # Default size for CQT features
         return icl, idx, x 

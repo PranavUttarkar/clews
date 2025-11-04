@@ -11,9 +11,11 @@
 #SBATCH --cpus-per-task=16
 
 module purge
-module load cuda/12.0          # or whatever version appears in `module spider`
-module load anaconda3/2023.09  # update version if different
+module load CUDA/12.1.1          # or whatever version appears in `module spider`
+module load Anaconda3/2024.02-1
 
+
+source $(conda info --base)/etc/profile.d/conda.sh
 conda activate clewsTesting
 
 export OMP_NUM_THREADS=1

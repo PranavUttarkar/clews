@@ -1,4 +1,5 @@
 #!/bin/bash
+#SBATCH --export=ALL
 #SBATCH -J dvi-h5
 #SBATCH --output=logs/clews_benchmark_%j.out
 #SBATCH --error=logs/clews_benchmark_%j.err
@@ -11,12 +12,17 @@
 #SBATCH --cpus-per-task=16
 
 module purge
-module load CUDA/12.1.1          # or whatever version appears in `module spider`
+module load CUDA/12.1.1
 module load Anaconda3/2024.02-1
 
-
+# Load bash and conda environment correctly
+source ~/.bashrc
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate clewsTesting
+
+echo "Python executable: $(which python)"
+echo "Python version: $(python --version)"
+python -m pip show omegaconf || echo "omegaconf missing"
 
 export OMP_NUM_THREADS=1
 export HDF5_USE_FILE_LOCKING=FALSE
